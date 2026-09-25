@@ -1,0 +1,47 @@
+name: Update official data
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 18 * * 1-5"
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch and validate official data
+        id: fetch
+        continue-on-error: true
+        run: python scraper.py
+
+      - name: Commit data and diagnostics
+        if: always()
+        run: |
+          git config user.name "bourse-casablanca-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/
+          git diff --cached --quiet && exit 0
+          git commit -m "Update official market data and audit diagnostics"
+          git push
+
+      - name: Fail workflow when quality is blocked
+        if: steps.fetch.outcome == 'failure'
+        run: |
+          echo "Data quality check failed. See data/quality_status.json and data/latest_candidate.json"
+          exit 1

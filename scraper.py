@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Relais cloud V7.2 — sources officielles uniquement.
+Relais cloud V7.3 — sources officielles uniquement.
 
 Sources:
 - Bourse de Casablanca: univers actions, marché actions, overview, avis
@@ -17,6 +17,7 @@ Sorties:
 """
 from __future__ import annotations
 import csv, json, re, time, unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from urllib.parse import urljoin
@@ -42,7 +43,7 @@ UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128 Safari/537.3
 
 def session():
     s = requests.Session()
-    retry = Retry(total=4, connect=4, read=4, backoff_factor=1.0,
+    retry = Retry(total=2, connect=2, read=2, backoff_factor=0.5,
                   status_forcelist=(429, 500, 502, 503, 504),
                   allowed_methods=frozenset(["GET"]))
     s.mount("https://", HTTPAdapter(max_retries=retry))
@@ -62,7 +63,7 @@ def fetch(url, params=None):
     AMMC et les autres domaines restent en validation TLS normale.
     """
     try:
-        r = S.get(url, params=params, timeout=50)
+        r = S.get(url, params=params, timeout=20)
         r.raise_for_status()
         return r.text
     except requests.exceptions.SSLError:
@@ -70,7 +71,7 @@ def fetch(url, params=None):
         if host not in ("www.casablanca-bourse.com", "casablanca-bourse.com"):
             raise
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        r = S.get(url, params=params, timeout=50, verify=False)
+        r = S.get(url, params=params, timeout=20, verify=False)
         r.raise_for_status()
         return r.text
 
@@ -237,14 +238,27 @@ def parse_instrument_fallback(ticker):
 def enrich_missing_market(universe, market):
     by = {x["ticker"]: x for x in market}
     missing = [u["ticker"] for u in universe if u["ticker"] not in by]
-    # Fetch missing tickers individually; this also covers suspended/no-trade names.
-    for i, ticker in enumerate(missing, 1):
+
+    # Fallback parallèle : beaucoup plus rapide que 81 requêtes séquentielles.
+    # 10 workers reste raisonnable pour ne pas surcharger le site officiel.
+    def one(ticker):
         try:
-            rec = parse_instrument_fallback(ticker)
-            by[ticker] = rec
+            return ticker, parse_instrument_fallback(ticker)
         except Exception as e:
-            by[ticker] = {"ticker": ticker, "instrument": ticker, "source": f"ERROR: {e}"}
-        time.sleep(0.10)
+            return ticker, {"ticker": ticker, "instrument": ticker, "source": f"ERROR: {e}"}
+
+    if missing:
+        print(f"Fallback fiches instruments : {len(missing)} tickers, traitement parallèle…")
+        done = 0
+        with ThreadPoolExecutor(max_workers=10) as ex:
+            futures = [ex.submit(one, t) for t in missing]
+            for fut in as_completed(futures):
+                ticker, rec = fut.result()
+                by[ticker] = rec
+                done += 1
+                if done % 10 == 0 or done == len(missing):
+                    print(f"  ✓ {done}/{len(missing)} fiches traitées")
+
     return [by[u["ticker"]] for u in universe]
 
 def parse_overview():

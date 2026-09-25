@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Relais cloud V7.1 — sources officielles uniquement.
+Relais cloud V7.2 — sources officielles uniquement.
 
 Sources:
 - Bourse de Casablanca: univers actions, marché actions, overview, avis
@@ -159,7 +159,10 @@ def parse_market(universe):
     sp = soup(URL_MARKET)
     table = find_table(sp, ["Instrument", "Dernier cours", "Volume"])
     if table is None:
-        raise RuntimeError("Table marché actions introuvable.")
+        # La page "marché actions" peut être rendue différemment selon la session.
+        # Dans ce cas on bascule sur les fiches officielles individuelles de chaque ticker.
+        print("⚠ Table marché globale introuvable — fallback vers les fiches instruments.")
+        return []
     headers = header_map(table)
     valid = {x["ticker"] for x in universe}
     out = []
@@ -212,12 +215,12 @@ def parse_instrument_fallback(ticker):
     sp = soup(url)
     text = clean(sp.get_text(" ", strip=True))
     pats = {
-        "close": r"Cours \(MAD\)\s+([0-9\s\u202f.,-]+)",
+        "close": r"(?:Cours \(MAD\)|Cours actuel|Dernier cours)\s+([0-9\s\u202f.,-]+)",
         "change_pct": r"Variation\s+([+\-−]?[0-9\s.,]+)\s*%",
         "open": r"Ouverture\s+([0-9\s\u202f.,-]+)",
-        "high": r"Plus haut\s+([0-9\s\u202f.,-]+)",
-        "low": r"Plus bas\s+([0-9\s\u202f.,-]+)",
-        "reference": r"Cours de clôture veille\s+([0-9\s\u202f.,-]+)",
+        "high": r"(?:Plus haut|\+ haut jour)\s+([0-9\s\u202f.,-]+)",
+        "low": r"(?:Plus bas|\+ bas jour)\s+([0-9\s\u202f.,-]+)",
+        "reference": r"(?:Cours de clôture veille|Cours de référence)\s+([0-9\s\u202f.,-]+)",
         "market_cap": r"Capitalisation\s+([0-9\s\u202f.,-]+)",
         "volume_mad": r"Volume\s+([0-9\s\u202f.,-]+)",
         "quantity": r"Quantité échangée\s+([0-9\s\u202f.,-]+)",

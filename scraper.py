@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Relais cloud V7.3 — sources officielles uniquement.
+Relais cloud V7.4 — sources officielles uniquement.
 
 Sources:
 - Bourse de Casablanca: univers actions, marché actions, overview, avis
@@ -214,25 +214,80 @@ def parse_market(universe):
 def parse_instrument_fallback(ticker):
     url = f"https://www.casablanca-bourse.com/fr/live-market/instruments/{ticker}"
     sp = soup(url)
-    text = clean(sp.get_text(" ", strip=True))
-    pats = {
-        "close": r"(?:Cours \(MAD\)|Cours actuel|Dernier cours)\s+([0-9\s\u202f.,-]+)",
-        "change_pct": r"Variation\s+([+\-−]?[0-9\s.,]+)\s*%",
-        "open": r"Ouverture\s+([0-9\s\u202f.,-]+)",
-        "high": r"(?:Plus haut|\+ haut jour)\s+([0-9\s\u202f.,-]+)",
-        "low": r"(?:Plus bas|\+ bas jour)\s+([0-9\s\u202f.,-]+)",
-        "reference": r"(?:Cours de clôture veille|Cours de référence)\s+([0-9\s\u202f.,-]+)",
-        "market_cap": r"Capitalisation\s+([0-9\s\u202f.,-]+)",
-        "volume_mad": r"Volume\s+([0-9\s\u202f.,-]+)",
-        "quantity": r"Quantité échangée\s+([0-9\s\u202f.,-]+)",
-        "transactions": r"Nombre de transactions\s+([0-9\s\u202f.,-]+)",
+
+    rec = {
+        "ticker": ticker, "instrument": ticker, "status": None, "source": url,
+        "reference": None, "open": None, "close": None, "quantity": None,
+        "volume_mad": None, "change_pct": None, "high": None, "low": None,
+        "bid": None, "ask": None, "bid_qty": None, "ask_qty": None,
+        "market_cap": None, "transactions": None
     }
-    rec = {"ticker": ticker, "instrument": ticker, "status": None, "source": url}
-    for k, p in pats.items():
-        m = re.search(p, text, re.I)
-        rec[k] = num_fr(m.group(1)) if m else None
+
+    pairs = {}
+    for tr in sp.find_all("tr"):
+        cells = tr.find_all(["th","td"])
+        if len(cells) >= 2:
+            key = clean(cells[0].get_text(" ", strip=True))
+            val = clean(cells[1].get_text(" ", strip=True))
+            if key:
+                pairs[norm(key)] = val
+
+    labels = [
+        "Cours (MAD)", "Variation", "Ouverture", "Plus haut", "+ haut jour",
+        "Plus bas", "+ bas jour", "Cours de clôture veille", "Cours de référence",
+        "Capitalisation", "Volume", "Quantité échangée", "Nombre de transactions"
+    ]
+    flat = [clean(x) for x in sp.stripped_strings]
+    wanted = {norm(x) for x in labels}
+    for i, txt in enumerate(flat[:-1]):
+        nt = norm(txt)
+        if nt in wanted:
+            pairs.setdefault(nt, flat[i+1])
+
+    def pget(*names):
+        for name in names:
+            n = norm(name)
+            if n in pairs:
+                return pairs[n]
+            for k, v in pairs.items():
+                if n == k or n in k or k in n:
+                    return v
+        return None
+
+    rec["close"] = num_fr(pget("Cours (MAD)", "Cours actuel", "Dernier cours"))
+    rec["change_pct"] = num_fr(pget("Variation", "Variation en %"))
+    rec["open"] = num_fr(pget("Ouverture"))
+    rec["high"] = num_fr(pget("Plus haut", "+ haut jour"))
+    rec["low"] = num_fr(pget("Plus bas", "+ bas jour"))
+    rec["reference"] = num_fr(pget("Cours de clôture veille", "Cours de référence"))
+    rec["market_cap"] = num_fr(pget("Capitalisation"))
+    rec["volume_mad"] = num_fr(pget("Volume"))
+    rec["quantity"] = num_fr(pget("Quantité échangée"))
+    rec["transactions"] = num_fr(pget("Nombre de transactions"))
+
+    if rec["close"] is None:
+        text = clean(sp.get_text(" ", strip=True))
+        pats = {
+            "close": r"(?:Cours \(MAD\)|Cours actuel|Dernier cours)\s+([0-9][0-9\s\u202f.,]*)",
+            "change_pct": r"Variation\s+([+\-−]?[0-9\s.,]+)\s*%",
+            "open": r"Ouverture\s+([0-9\s\u202f.,-]+)",
+            "high": r"(?:Plus haut|\+ haut jour)\s+([0-9\s\u202f.,-]+)",
+            "low": r"(?:Plus bas|\+ bas jour)\s+([0-9\s\u202f.,-]+)",
+            "reference": r"(?:Cours de clôture veille|Cours de référence)\s+([0-9\s\u202f.,-]+)",
+            "market_cap": r"Capitalisation\s+([0-9\s\u202f.,-]+)",
+            "volume_mad": r"Volume\s+([0-9\s\u202f.,-]+)",
+            "quantity": r"Quantité échangée\s+([0-9\s\u202f.,-]+)",
+            "transactions": r"Nombre de transactions\s+([0-9\s\u202f.,-]+)",
+        }
+        for k, ptn in pats.items():
+            if rec.get(k) is None:
+                m = re.search(ptn, text, re.I)
+                if m:
+                    rec[k] = num_fr(m.group(1))
+
     if rec.get("close") is None:
         rec["close"] = rec.get("reference")
+
     return rec
 
 def enrich_missing_market(universe, market):
@@ -356,7 +411,9 @@ def main():
     market0 = parse_market(universe)
     market = enrich_missing_market(universe, market0)
     valid_market = [m for m in market if m.get("close") is not None]
+    print(f"Couverture cours valides : {len(valid_market)}/{len(market)}")
     if len(valid_market) < 40:
+        print("Exemples de lignes non parsées :", market[:5])
         raise RuntimeError(f"Couverture marché insuffisante: {len(valid_market)} cours valides.")
 
     indices = parse_overview()

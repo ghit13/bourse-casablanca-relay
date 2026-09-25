@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Relais cloud V7 — sources officielles uniquement.
+Relais cloud V7.1 — sources officielles uniquement.
 
 Sources:
 - Bourse de Casablanca: univers actions, marché actions, overview, avis
@@ -22,6 +22,7 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 import requests
+import urllib3
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -51,9 +52,27 @@ def session():
 S = session()
 
 def fetch(url, params=None):
-    r = S.get(url, params=params, timeout=50)
-    r.raise_for_status()
-    return r.text
+    """
+    Bourse de Casablanca présente actuellement une chaîne de certificat
+    que requests/OpenSSL ne parvient pas toujours à construire, même sur
+    GitHub Actions. On tente d'abord la validation TLS normale.
+    Pour CE DOMAINE PUBLIC UNIQUEMENT, si la validation échoue, on refait
+    la requête sans validation TLS. Les données sont ensuite soumises aux
+    contrôles de couverture/cohérence du script avant publication.
+    AMMC et les autres domaines restent en validation TLS normale.
+    """
+    try:
+        r = S.get(url, params=params, timeout=50)
+        r.raise_for_status()
+        return r.text
+    except requests.exceptions.SSLError:
+        host = re.sub(r"^https?://", "", url).split("/", 1)[0].lower()
+        if host not in ("www.casablanca-bourse.com", "casablanca-bourse.com"):
+            raise
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        r = S.get(url, params=params, timeout=50, verify=False)
+        r.raise_for_status()
+        return r.text
 
 def soup(url, params=None):
     return BeautifulSoup(fetch(url, params=params), "html.parser")
